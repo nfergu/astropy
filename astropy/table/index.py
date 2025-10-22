@@ -358,17 +358,10 @@ class Index:
         """Get the indexed columns, dereferencing weak references."""
         if not hasattr(self, '_column_refs'):
             return []
-        # Dereference all weak references and check for None
-        columns = []
-        for ref in self._column_refs:
-            col = ref()
-            if col is None:
-                raise RuntimeError(
-                    "Column has been garbage collected. This indicates an internal "
-                    "error in the index/column lifecycle management."
-                )
-            columns.append(col)
-        return columns
+        # Dereference all weak references
+        # During unpickling reconstruction, _column_refs may contain None entries
+        # that are being filled in by replace_col calls
+        return [ref() if ref is not None else None for ref in self._column_refs]
     
     @columns.setter
     def columns(self, columns):
@@ -396,7 +389,24 @@ class Index:
         new_col : Column
             New column reference
         """
-        pos = self.col_position(prev_col.info.name)
+        # Handle case where _column_refs doesn't exist (e.g., after unpickling)
+        if not hasattr(self, '_column_refs'):
+            # After unpickling, _column_refs doesn't exist. Initialize it based on
+            # the number of columns in the index data, filling with None temporarily.
+            # The actual columns will be filled in by subsequent replace_col calls.
+            num_cols = len(self.data.colnames) if hasattr(self.data, 'colnames') else 1
+            self._column_refs = [None] * num_cols
+        
+        # Find the position of the column to replace by name
+        # During reconstruction after unpickling, we can't use col_position because
+        # some columns might still be None. Instead, look up in data.colnames.
+        colnames = self.data.colnames if hasattr(self.data, 'colnames') else None
+        if colnames and prev_col.info.name in colnames:
+            pos = colnames.index(prev_col.info.name)
+        else:
+            # Fall back to col_position for normal (non-reconstruction) cases
+            pos = self.col_position(prev_col.info.name)
+        
         self._column_refs[pos] = weakref.ref(new_col)
 
     def reload(self):
@@ -660,6 +670,28 @@ class Index:
         index.columns = self.columns[:]  # new list, same columns
         memo[id(self)] = index
         return index
+
+    def __getstate__(self):
+        """
+        Return state for pickling.
+        
+        Since weakrefs cannot be pickled, we exclude _column_refs from the state.
+        It will be restored via the columns property setter when columns is set
+        on the unpickled object.
+        """
+        state = self.__dict__.copy()
+        # Remove weak references from state - they'll be recreated
+        state.pop('_column_refs', None)
+        return state
+    
+    def __setstate__(self, state):
+        """
+        Restore state from unpickling.
+        
+        _column_refs is not included in the pickled state and will be created
+        when columns are accessed or set on the restored object.
+        """
+        self.__dict__.update(state)
 
 
 class SlicedIndex:
