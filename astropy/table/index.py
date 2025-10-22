@@ -379,7 +379,8 @@ class Index:
         new_col : Column
             New column reference
         """
-        self.columns[self.col_position(prev_col.info.name)] = new_col
+        pos = self.col_position(prev_col.info.name)
+        self._column_refs[pos] = weakref.ref(new_col)
 
     def reload(self):
         """
