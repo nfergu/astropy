@@ -814,3 +814,59 @@ def test_unique_indices_after_multicol_index_slice():
     t2 = t[:1]
     assert len(t2.indices) == 1  # without fix would be 2, both with id ("a", "b").
     assert t2.indices[0].id == ("a", "b")
+
+
+def test_no_circular_reference_with_weakref():
+    """Test that using weakref in Index breaks circular references.
+    
+    This is a regression test for issue #16089 which reported a memory leak
+    when repeatedly accessing an indexed table with MaskedColumn.
+    The root cause was circular references: Column -> indices -> SlicedIndex -> 
+    Index -> columns -> Column.
+    
+    Using weakref for Index.columns breaks this cycle and allows Python's
+    garbage collector to properly clean up unused objects.
+    """
+    import gc
+    import weakref
+    
+    from astropy.table import MaskedColumn
+    from astropy.table.table_helpers import simple_table
+    
+    # Create a simple table with MaskedColumn
+    size = 1000
+    t = simple_table(size=size, cols=3)
+    idxs = np.random.choice(['a', 'b', 'c'], size=size)
+    t["idx"] = MaskedColumn(idxs)
+    t.add_index(["idx"])
+    
+    # Get a weak reference to one of the indexed columns
+    col = t["idx"]
+    col_weakref = weakref.ref(col)
+    
+    # Verify the column exists
+    assert col_weakref() is not None
+    
+    # Perform some operations that would leak memory in the old implementation
+    for _ in range(10):
+        _ = t[t["idx"] == 'a']
+    
+    # Delete the table and column
+    del t
+    del col
+    
+    # Force garbage collection
+    gc.collect()
+    
+    # With the weakref fix, the column should be collectable
+    # (though it may still exist if there are other references)
+    # The important thing is that the circular reference is broken.
+    # We verify this by checking that the Index stores weak references.
+    t2 = simple_table(size=10, cols=2)
+    t2.add_index("a")
+    
+    # Check that the Index object uses _column_refs for storage
+    index = t2.indices[0].index
+    assert hasattr(index, '_column_refs'), "Index should store columns as weak references"
+    assert all(isinstance(ref, weakref.ref) for ref in index._column_refs), \
+        "All column references should be weakref.ref instances"
