@@ -208,6 +208,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+import weakref
 
 import numpy as np
 
@@ -301,7 +302,7 @@ class Index:
             # create from data
             self.engine = engine_cls
             self.data = engine
-            self.columns = columns
+            self._column_refs = [weakref.ref(col) for col in columns] if columns else []
             return
 
         self.engine = engine
@@ -342,7 +343,21 @@ class Index:
             row_index = lines[lines.colnames[-1]]
 
         self.data = self.engine(data, row_index, unique=unique)
-        self.columns = columns
+        self._column_refs = [weakref.ref(col) for col in columns]
+
+    @property
+    def columns(self):
+        """
+        Return list of columns by dereferencing weak references.
+        """
+        return [ref() for ref in self._column_refs]
+
+    @columns.setter
+    def columns(self, cols):
+        """
+        Set columns using weak references.
+        """
+        self._column_refs = [weakref.ref(col) for col in cols]
 
     def __len__(self):
         """
@@ -621,7 +636,8 @@ class Index:
         index = super().__new__(self.__class__)
         index.__init__(None, engine=self.engine)
         index.data = deepcopy(self.data, memo)
-        index.columns = self.columns[:]  # new list, same columns
+        # Shallow copy of column refs (same columns, new list of weak refs)
+        index._column_refs = self._column_refs[:]
         memo[id(self)] = index
         return index
 
