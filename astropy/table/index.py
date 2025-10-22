@@ -208,6 +208,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+import weakref
 
 import numpy as np
 
@@ -301,7 +302,7 @@ class Index:
             # create from data
             self.engine = engine_cls
             self.data = engine
-            self.columns = columns
+            self.columns = columns  # Will use property setter
             return
 
         self.engine = engine
@@ -342,7 +343,24 @@ class Index:
             row_index = lines[lines.colnames[-1]]
 
         self.data = self.engine(data, row_index, unique=unique)
-        self.columns = columns
+        self.columns = columns  # Will use property setter
+
+    @property
+    def columns(self):
+        """Get the indexed columns, dereferencing weak references."""
+        if not hasattr(self, '_column_refs'):
+            return []
+        # Dereference all weak references
+        return [ref() for ref in self._column_refs]
+    
+    @columns.setter
+    def columns(self, columns):
+        """Set the indexed columns as weak references."""
+        if columns is None:
+            self._column_refs = []
+        else:
+            # Store weak references to avoid circular references
+            self._column_refs = [weakref.ref(col) for col in columns]
 
     def __len__(self):
         """
