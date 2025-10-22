@@ -358,8 +358,17 @@ class Index:
         """Get the indexed columns, dereferencing weak references."""
         if not hasattr(self, '_column_refs'):
             return []
-        # Dereference all weak references
-        return [ref() for ref in self._column_refs]
+        # Dereference all weak references and check for None
+        columns = []
+        for ref in self._column_refs:
+            col = ref()
+            if col is None:
+                raise RuntimeError(
+                    "Column has been garbage collected. This indicates an internal "
+                    "error in the index/column lifecycle management."
+                )
+            columns.append(col)
+        return columns
     
     @columns.setter
     def columns(self, columns):
