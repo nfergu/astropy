@@ -276,6 +276,14 @@ class Index:
         If the supplied argument is None (by default), use SortedArray.
     unique : bool (defaults to False)
         Whether the values of the index must be unique
+        
+    Notes
+    -----
+    To avoid memory leaks from circular references (see issue #16089), 
+    columns are stored as weak references in the _column_refs attribute.
+    The columns property dereferences these weak references on access.
+    This breaks the circular reference cycle:
+    Column -> indices -> SlicedIndex -> Index -> columns -> Column
     """
 
     def __init__(self, columns, engine=None, unique=False):

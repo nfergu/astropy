@@ -43,6 +43,10 @@ astropy.table
   (e.g. ``t.add_index("a"); ts = t[1:5]; ts.remove_row(2)``) was giving incorrect results
   or failing. [#18511]
 
+- Fixed memory leak in Table indices when using MaskedColumn. The circular reference
+  between Column, SlicedIndex, Index, and back to Column prevented proper garbage
+  collection. Index now uses weak references to store columns, breaking the cycle. [#16089]
+
 astropy.time
 ^^^^^^^^^^^^
 
