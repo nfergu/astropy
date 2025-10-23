@@ -394,13 +394,19 @@ class Index:
             # After unpickling, _column_refs doesn't exist. Initialize it based on
             # the number of columns in the index data, filling with None temporarily.
             # The actual columns will be filled in by subsequent replace_col calls.
-            num_cols = len(self.data.colnames) if hasattr(self.data, 'colnames') else 1
+            # self.data is the engine (SortedArray, BST, etc.), and engine.data is the Table
+            data_table = getattr(self.data, 'data', None)
+            if data_table and hasattr(data_table, 'colnames'):
+                num_cols = len(data_table.colnames)
+            else:
+                num_cols = 1
             self._column_refs = [None] * num_cols
         
         # Find the position of the column to replace by name
         # During reconstruction after unpickling, we can't use col_position because
         # some columns might still be None. Instead, look up in data.colnames.
-        colnames = self.data.colnames if hasattr(self.data, 'colnames') else None
+        data_table = getattr(self.data, 'data', None)
+        colnames = getattr(data_table, 'colnames', None) if data_table else None
         if colnames and prev_col.info.name in colnames:
             pos = colnames.index(prev_col.info.name)
         else:
