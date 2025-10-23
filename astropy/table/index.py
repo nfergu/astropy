@@ -376,7 +376,7 @@ class Index:
         """
         Number of rows in index.
         """
-        return len(self.columns[0])
+        return len(self.data)
 
     def replace_col(self, prev_col, new_col):
         """
@@ -425,7 +425,7 @@ class Index:
             Name of column to look up
         """
         for i, c in enumerate(self.columns):
-            if c.info.name == col_name:
+            if c is not None and c.info.name == col_name:
                 return i
         raise ValueError(f"Column does not belong to index: {col_name}")
 
@@ -448,7 +448,7 @@ class Index:
                 key[self.col_position(col.info.name)] = vals[i]
             except ValueError:  # not a member of index
                 continue
-        num_rows = len(self.columns[0])
+        num_rows = len(self.data)
         if pos < num_rows:
             # shift all rows >= pos to the right
             self.data.shift_right(pos)
@@ -469,7 +469,7 @@ class Index:
         elif isinstance(row_specifier, (list, np.ndarray)):
             return row_specifier
         elif isinstance(row_specifier, slice):
-            col_len = len(self.columns[0])
+            col_len = len(self.data)
             return range(*row_specifier.indices(col_len))
         raise ValueError(
             f"Expected int, array of ints, or slice but got {row_specifier} "
