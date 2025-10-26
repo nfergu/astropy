@@ -359,9 +359,20 @@ class Index:
         if not hasattr(self, '_column_refs'):
             return []
         # Dereference all weak references
-        # During unpickling reconstruction, _column_refs may contain None entries
-        # that are being filled in by replace_col calls
-        return [ref() if ref is not None else None for ref in self._column_refs]
+        columns = []
+        for i, ref in enumerate(self._column_refs):
+            if ref is None:
+                # This should only happen during unpickling reconstruction
+                raise RuntimeError(
+                    f"Column {i} not yet initialized. Index is in transient state during unpickling."
+                )
+            col = ref()
+            if col is None:
+                raise RuntimeError(
+                    f"Column {i} has been garbage collected. This indicates a bug."
+                )
+            columns.append(col)
+        return columns
     
     @columns.setter
     def columns(self, columns):
