@@ -376,7 +376,9 @@ class Index:
         """
         Number of rows in index.
         """
-        return len(self.data)
+        # self.data is the engine (SortedArray, BST, etc.)
+        # engine.row_index is a Column that has the length we need
+        return len(self.data.row_index)
 
     def replace_col(self, prev_col, new_col):
         """
@@ -454,7 +456,7 @@ class Index:
                 key[self.col_position(col.info.name)] = vals[i]
             except ValueError:  # not a member of index
                 continue
-        num_rows = len(self.data)
+        num_rows = len(self.data.row_index)
         if pos < num_rows:
             # shift all rows >= pos to the right
             self.data.shift_right(pos)
@@ -475,7 +477,7 @@ class Index:
         elif isinstance(row_specifier, (list, np.ndarray)):
             return row_specifier
         elif isinstance(row_specifier, slice):
-            col_len = len(self.data)
+            col_len = len(self.data.row_index)
             return range(*row_specifier.indices(col_len))
         raise ValueError(
             f"Expected int, array of ints, or slice but got {row_specifier} "
