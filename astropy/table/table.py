@@ -3428,7 +3428,7 @@ class Table:
         for col, new_col in zip(self.columns.values(), columns.values()):
             new_col.info.indices = []
             for index in col.info.indices:
-                index.replace_col(col, new_col)
+                index.columns[index.col_position(col.info.name)] = new_col
                 new_col.info.indices.append(index)
 
         self.columns = columns

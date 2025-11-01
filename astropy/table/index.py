@@ -279,11 +279,10 @@ class Index:
         
     Notes
     -----
-    To avoid memory leaks from circular references (see issue #16089), 
-    columns are stored as weak references in the _column_refs attribute.
-    The columns property dereferences these weak references on access.
-    This breaks the circular reference cycle:
-    Column -> indices -> SlicedIndex -> Index -> columns -> Column
+    Columns are stored internally as weak references to break the circular
+    reference cycle: Column → indices → SlicedIndex → Index → columns → Column.
+    This prevents memory leaks when tables with indices are repeatedly created
+    and destroyed (see issue #16089).
     """
 
     def __init__(self, columns, engine=None, unique=False):
@@ -310,7 +309,7 @@ class Index:
             # create from data
             self.engine = engine_cls
             self.data = engine
-            self.columns = columns  # Will use property setter
+            self.columns = columns
             return
 
         self.engine = engine
@@ -351,45 +350,30 @@ class Index:
             row_index = lines[lines.colnames[-1]]
 
         self.data = self.engine(data, row_index, unique=unique)
-        self.columns = columns  # Will use property setter
+        self._set_columns(columns)
 
-    @property
-    def columns(self):
-        """Get the indexed columns, dereferencing weak references."""
-        if not hasattr(self, '_column_refs'):
-            return []
-        # Dereference all weak references
-        columns = []
-        for i, ref in enumerate(self._column_refs):
-            if ref is None:
-                # This should only happen during unpickling reconstruction
-                raise RuntimeError(
-                    f"Column {i} not yet initialized. Index is in transient state during unpickling."
-                )
-            col = ref()
-            if col is None:
-                raise RuntimeError(
-                    f"Column {i} has been garbage collected. This indicates a bug."
-                )
-            columns.append(col)
-        return columns
-    
-    @columns.setter
-    def columns(self, columns):
-        """Set the indexed columns as weak references."""
+    def _set_columns(self, columns):
+        """Set columns, storing them as weak references to break circular refs."""
         if columns is None:
             self._column_refs = []
         else:
-            # Store weak references to avoid circular references
             self._column_refs = [weakref.ref(col) for col in columns]
+    
+    @property
+    def columns(self):
+        """Get columns, dereferencing weak references."""
+        return [ref() for ref in self._column_refs]
+    
+    @columns.setter
+    def columns(self, columns):
+        """Set columns via the _set_columns method."""
+        self._set_columns(columns)
 
     def __len__(self):
         """
         Number of rows in index.
         """
-        # self.data is the engine (SortedArray, BST, etc.)
-        # engine.row_index is a Column that has the length we need
-        return len(self.data.row_index)
+        return len(self.columns[0])
 
     def replace_col(self, prev_col, new_col):
         """
@@ -402,31 +386,7 @@ class Index:
         new_col : Column
             New column reference
         """
-        # Handle case where _column_refs doesn't exist (e.g., after unpickling)
-        if not hasattr(self, '_column_refs'):
-            # After unpickling, _column_refs doesn't exist. Initialize it based on
-            # the number of columns in the index data, filling with None temporarily.
-            # The actual columns will be filled in by subsequent replace_col calls.
-            # self.data is the engine (SortedArray, BST, etc.), and engine.data is the Table
-            data_table = getattr(self.data, 'data', None)
-            if data_table and hasattr(data_table, 'colnames'):
-                num_cols = len(data_table.colnames)
-            else:
-                num_cols = 1
-            self._column_refs = [None] * num_cols
-        
-        # Find the position of the column to replace by name
-        # During reconstruction after unpickling, we can't use col_position because
-        # some columns might still be None. Instead, look up in data.colnames.
-        data_table = getattr(self.data, 'data', None)
-        colnames = getattr(data_table, 'colnames', None) if data_table else None
-        if colnames and prev_col.info.name in colnames:
-            pos = colnames.index(prev_col.info.name)
-        else:
-            # Fall back to col_position for normal (non-reconstruction) cases
-            pos = self.col_position(prev_col.info.name)
-        
-        self._column_refs[pos] = weakref.ref(new_col)
+        self.columns[self.col_position(prev_col.info.name)] = new_col
 
     def reload(self):
         """
@@ -444,7 +404,7 @@ class Index:
             Name of column to look up
         """
         for i, c in enumerate(self.columns):
-            if c is not None and c.info.name == col_name:
+            if c.info.name == col_name:
                 return i
         raise ValueError(f"Column does not belong to index: {col_name}")
 
@@ -467,7 +427,7 @@ class Index:
                 key[self.col_position(col.info.name)] = vals[i]
             except ValueError:  # not a member of index
                 continue
-        num_rows = len(self.data.row_index)
+        num_rows = len(self.columns[0])
         if pos < num_rows:
             # shift all rows >= pos to the right
             self.data.shift_right(pos)
@@ -488,7 +448,7 @@ class Index:
         elif isinstance(row_specifier, (list, np.ndarray)):
             return row_specifier
         elif isinstance(row_specifier, slice):
-            col_len = len(self.data.row_index)
+            col_len = len(self.columns[0])
             return range(*row_specifier.indices(col_len))
         raise ValueError(
             f"Expected int, array of ints, or slice but got {row_specifier} "
@@ -689,28 +649,22 @@ class Index:
         index.columns = self.columns[:]  # new list, same columns
         memo[id(self)] = index
         return index
-
+    
     def __getstate__(self):
-        """
-        Return state for pickling.
-        
-        Since weakrefs cannot be pickled, we exclude _column_refs from the state.
-        It will be restored via the columns property setter when columns is set
-        on the unpickled object.
-        """
+        """Prepare state for pickling - store actual columns, not weakrefs."""
         state = self.__dict__.copy()
-        # Remove weak references from state - they'll be recreated
-        state.pop('_column_refs', None)
+        # Replace weakrefs with actual columns for pickling
+        state['_columns_for_pickle'] = self.columns
+        del state['_column_refs']
         return state
     
     def __setstate__(self, state):
-        """
-        Restore state from unpickling.
-        
-        _column_refs is not included in the pickled state and will be created
-        when columns are accessed or set on the restored object.
-        """
+        """Restore state from pickling - convert columns back to weakrefs."""
+        # Extract columns and remove the temporary attribute
+        columns = state.pop('_columns_for_pickle', [])
         self.__dict__.update(state)
+        # Convert back to weakrefs
+        self._set_columns(columns)
 
 
 class SlicedIndex:
