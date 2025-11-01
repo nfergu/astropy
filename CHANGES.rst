@@ -43,6 +43,10 @@ astropy.table
   (e.g. ``t.add_index("a"); ts = t[1:5]; ts.remove_row(2)``) was giving incorrect results
   or failing. [#18511]
 
+- Fixed memory leak in Table indices caused by circular references between Column
+  and Index objects. Columns are now stored as weak references in Index to break
+  the circular reference cycle while maintaining full functionality. [#16089]
+
 astropy.time
 ^^^^^^^^^^^^
 

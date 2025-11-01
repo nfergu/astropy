@@ -208,6 +208,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+import weakref
 
 import numpy as np
 
@@ -275,6 +276,13 @@ class Index:
         If the supplied argument is None (by default), use SortedArray.
     unique : bool (defaults to False)
         Whether the values of the index must be unique
+        
+    Notes
+    -----
+    Columns are stored internally as weak references to break the circular
+    reference cycle: Column → indices → SlicedIndex → Index → columns → Column.
+    This prevents memory leaks when tables with indices are repeatedly created
+    and destroyed (see issue #16089).
     """
 
     def __init__(self, columns, engine=None, unique=False):
@@ -342,7 +350,24 @@ class Index:
             row_index = lines[lines.colnames[-1]]
 
         self.data = self.engine(data, row_index, unique=unique)
-        self.columns = columns
+        self._set_columns(columns)
+
+    def _set_columns(self, columns):
+        """Set columns, storing them as weak references to break circular refs."""
+        if columns is None:
+            self._column_refs = []
+        else:
+            self._column_refs = [weakref.ref(col) for col in columns]
+    
+    @property
+    def columns(self):
+        """Get columns, dereferencing weak references."""
+        return [ref() for ref in self._column_refs]
+    
+    @columns.setter
+    def columns(self, columns):
+        """Set columns via the _set_columns method."""
+        self._set_columns(columns)
 
     def __len__(self):
         """
@@ -624,6 +649,22 @@ class Index:
         index.columns = self.columns[:]  # new list, same columns
         memo[id(self)] = index
         return index
+    
+    def __getstate__(self):
+        """Prepare state for pickling - store actual columns, not weakrefs."""
+        state = self.__dict__.copy()
+        # Replace weakrefs with actual columns for pickling
+        state['_columns_for_pickle'] = self.columns
+        del state['_column_refs']
+        return state
+    
+    def __setstate__(self, state):
+        """Restore state from pickling - convert columns back to weakrefs."""
+        # Extract columns and remove the temporary attribute
+        columns = state.pop('_columns_for_pickle', [])
+        self.__dict__.update(state)
+        # Convert back to weakrefs
+        self._set_columns(columns)
 
 
 class SlicedIndex:
